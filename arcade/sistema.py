@@ -1,40 +1,58 @@
-import hid
-import time
 import subprocess
-import psutil
+import keyboard
+import time
 import os
+import psutil
 
-# Configuración
-VENDOR_ID = 0x0079
-PRODUCT_ID = 0x0006
-TIEMPO_LARGO = 5            # Tiempo necesario de pulsación para activar RetroBat (segundos)
-INACTIVIDAD_MAX = 30        # Tiempo sin interacción para cerrar RetroBat (segundos)
-RETROBAT_PATH = r"C:\retrobat\retrobat.exe"  # Ajusta la ruta si es diferente
+# Variables globales para procesos
+proceso_main = None
+proceso_historia = None
 
-retrobat_process = None
-ultima_actividad = time.time()
+# Función para lanzar los scripts
+def iniciar_scripts():
+    global proceso_main, proceso_historia
+    proceso_main = subprocess.Popen(["python", "main.py"], creationflags=subprocess.CREATE_NEW_CONSOLE)
+    proceso_historia = subprocess.Popen(["python", "modo_historia.py"], creationflags=subprocess.CREATE_NEW_CONSOLE)
+    print("✅ Scripts lanzados: main.py y modo_historia.py")
 
-# Función para cerrar todos los procesos relacionados con RetroBat
-def cerrar_retrobat_completo():
-    procesos_retrobat = [
-        "retrobat.exe", "emulationstation.exe", "retroarch.exe", "pcsx2.exe",
-        "mame.exe", "dolphin.exe", "snes9x.exe", "project64.exe", "citra.exe"
-    ]
-    cerrados = 0
+# Función para cerrar los scripts
+def cerrar_scripts():
+    global proceso_main, proceso_historia
+    if proceso_main and proceso_main.poll() is None:
+        proceso_main.terminate()
+        proceso_main.wait(timeout=5)
+    if proceso_historia and proceso_historia.poll() is None:
+        proceso_historia.terminate()
+        proceso_historia.wait(timeout=5)
+    print("🛑 Scripts cerrados.")
+
+# Función para cerrar RetroBat
+def cerrar_retrobat():
     for proc in psutil.process_iter(['pid', 'name']):
-        nombre = proc.info['name']
-        if nombre and any(nombre.lower() == p for p in procesos_retrobat):
+        if "emulationstation.exe" in proc.info['name'].lower():
             try:
-                print(f"🛑 Cerrando proceso: {nombre} (PID {proc.pid})")
-                proc.terminate()
-                proc.wait(timeout=5)
-                cerrados += 1
+                proc.kill()
+                print("🛑 RetroBat cerrado.")
             except Exception as e:
-                print(f"⚠️ No se pudo cerrar {nombre}: {e}")
-    if cerrados == 0:
-        print("ℹ️ No se encontró ningún proceso de RetroBat.")
+                print(f"⚠️ Error cerrando RetroBat: {e}")
 
-# Función para cerrar VLC si está en ejecución
+# Función para cerrar emuladores
+def cerrar_emuladores():
+    emuladores = [
+        "pcsx2.exe", "snes9x.exe", "project64.exe", "dolphin.exe",
+        "mame.exe", "retroarch.exe", "psp.exe", "citra.exe"
+    ]
+    for proc in psutil.process_iter(['pid', 'name']):
+        nombre_proc = proc.info['name'].lower()
+        for emulador in emuladores:
+            if emulador in nombre_proc:
+                try:
+                    proc.kill()
+                    print(f"🛑 Emulador cerrado: {nombre_proc}")
+                except Exception as e:
+                    print(f"⚠️ Error cerrando {nombre_proc}: {e}")
+
+# Función para cerrar VLC
 def cerrar_vlc_si_abierto():
     for proc in psutil.process_iter(['pid', 'name']):
         if proc.info['name'] and "vlc.exe" in proc.info['name'].lower():
@@ -44,55 +62,70 @@ def cerrar_vlc_si_abierto():
             except Exception as e:
                 print(f"⚠️ No se pudo cerrar VLC: {e}")
 
-def main():
-    global retrobat_process, ultima_actividad
+# Lanzar scripts al inicio
+iniciar_scripts()
 
-    # Abrimos el dispositivo HID
-    dev = hid.device()
-    dev.open(VENDOR_ID, PRODUCT_ID)
-    dev.set_nonblocking(1)
-    print("🎮 Botón arcade conectado.")
+print("🎮 Sistema iniciado. Mantén pulsado '2' durante 10 segundos para cambiar a RetroBat...")
 
-    pulsado = False
-    inicio_pulsacion = None
-    accion_realizada = False
+tiempo_inicio = None
+duracion_activacion = 10  # segundos
+tiempo_sin_tecla = None
+retrobat_lanzado = False
 
+try:
     while True:
-        data = dev.read(64)
+        if not retrobat_lanzado:
+            # Si se mantiene pulsado el 2 durante 10s
+            if keyboard.is_pressed("2"):
+                if tiempo_inicio is None:
+                    tiempo_inicio = time.time()
+                elif time.time() - tiempo_inicio >= duracion_activacion:
+                    print("🟢 Botón '2' mantenido más de 10s. Cerrando scripts y emuladores...")
 
-        if data:
-            boton_presionado = data[5] != 0  # Ajusta si otro byte representa el botón
+                    cerrar_scripts()
+                    cerrar_emuladores()
+                    cerrar_vlc_si_abierto()
 
-            if boton_presionado:
-                if not pulsado:
-                    inicio_pulsacion = time.time()
-                    pulsado = True
-                    accion_realizada = False
-                elif not accion_realizada and (time.time() - inicio_pulsacion) >= TIEMPO_LARGO:
-                    print("🟢 Lanzando RetroBat...")
-                    cerrar_vlc_si_abierto()  # Asegúrate de cerrarlo antes
-                    retrobat_process = subprocess.Popen([RETROBAT_PATH], shell=True)
-                    accion_realizada = True
-                    ultima_actividad = time.time()
+                    print("🚀 Lanzando RetroBat...")
+                    subprocess.Popen(r"C:\RetroBat\retrobat.exe", shell=True)
+                    retrobat_lanzado = True
+                    tiempo_sin_tecla = time.time()
             else:
-                pulsado = False
-                inicio_pulsacion = None
-                accion_realizada = False
+                tiempo_inicio = None
+        else:
+            # Vigilamos si RetroBat está abierto y cerramos VLC si aparece
+            for proc in psutil.process_iter(['name']):
+                if proc.info['name'] and "emulationstation.exe" in proc.info['name'].lower():
+                    cerrar_vlc_si_abierto()
+                    break
 
-            ultima_actividad = time.time()
+            # Vigilamos inactividad de teclado
+            teclas_monitor = [
+                "a", "b", "c", "d", "e", "f", "g", "h", "i", "j",
+                "k", "l", "m", "n", "o", "p", "q", "r", "s", "t",
+                "u", "v", "w", "x", "y", "z",
+                "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+                "space", "enter", "esc", "up", "down", "left", "right",
+                "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12"
+            ]
 
-        # Monitorear VLC mientras RetroBat está activo
-        if retrobat_process and retrobat_process.poll() is None:
-            cerrar_vlc_si_abierto()
+            if any(keyboard.is_pressed(k) for k in teclas_monitor):
+                tiempo_sin_tecla = time.time()
 
-        # Cierre por inactividad
-        if time.time() - ultima_actividad >= INACTIVIDAD_MAX:
-            print("⏳ Inactividad detectada. Cerrando RetroBat...")
-            cerrar_retrobat_completo()
-            retrobat_process = None
-            ultima_actividad = time.time()
+            if time.time() - tiempo_sin_tecla >= 60:
+                print("⏳ Inactividad detectada. Cerrando RetroBat y relanzando scripts...")
 
-        time.sleep(0.05)
+                cerrar_retrobat()
+                cerrar_emuladores()
+                time.sleep(2)
+                iniciar_scripts()
+                retrobat_lanzado = False
+                tiempo_inicio = None
 
-if __name__ == "__main__":
-    main()
+        time.sleep(0.1)
+
+except KeyboardInterrupt:
+    print("🛑 Sistema detenido manualmente.")
+    cerrar_scripts()
+    cerrar_emuladores()
+    cerrar_retrobat()
